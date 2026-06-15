@@ -281,6 +281,25 @@ final class InputProcessorTests: XCTestCase {
         }
     }
 
+    func testResolveAction_mediaKeysResolveToMediaKeyActionAndAreTrigger() {
+        let expected: [String: MediaKeyActionKind] = [
+            "mediaVolumeUp": .volumeUp, "mediaVolumeDown": .volumeDown, "mediaMute": .mute,
+            "mediaBrightnessUp": .brightnessUp, "mediaBrightnessDown": .brightnessDown,
+            "mediaKeyboardBacklightUp": .keyboardBacklightUp,
+            "mediaKeyboardBacklightDown": .keyboardBacklightDown,
+        ]
+        for (identifier, kind) in expected {
+            guard let action = ShortcutExecutor.shared.resolveAction(named: identifier) else {
+                return XCTFail("Expected \(identifier) to resolve")
+            }
+            guard case .mediaKey(let resolvedKind) = action else {
+                return XCTFail("Expected \(identifier) to resolve to .mediaKey")
+            }
+            XCTAssertEqual(resolvedKind, kind)
+            XCTAssertEqual(action.executionMode, .trigger)
+        }
+    }
+
     func testProcess_mosScrollDash_downAndUpControlsDashState() {
         let trigger = RecordedEvent(type: .mouse, code: 3, modifiers: 0, displayComponents: ["🖱4"], deviceFilter: nil)
         let binding = ButtonBinding(triggerEvent: trigger, systemShortcutName: "mosScrollDash", isEnabled: true)
