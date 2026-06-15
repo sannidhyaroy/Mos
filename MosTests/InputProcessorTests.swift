@@ -1399,6 +1399,32 @@ final class MouseGestureControllerTests: XCTestCase {
         XCTAssertEqual(replays, 0)
     }
 
+    func testScrollGestureExecutesBindingAndConsumes() {
+        let b = bind(.scrollUp)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        XCTAssertTrue(controller.hasScrollArmedSession)
+        time = 0.05
+        XCTAssertTrue(controller.handleScroll(dx: 0, dy: 4))   // 向上, 已布防 → 消费
+        time = 0.10; XCTAssertTrue(controller.handleUp(mouse(.up)))
+
+        XCTAssertEqual(executed.map(\.id), [b.id])
+        XCTAssertEqual(replays, 0)  // 滚轮手势触发后抬起不补点击
+        XCTAssertFalse(controller.hasScrollArmedSession)  // 抬起后会话清理
+    }
+
+    func testScrollOnNonScrollButtonNotConsumed() {
+        let b = bind(.longPress)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        XCTAssertFalse(controller.hasScrollArmedSession)
+        XCTAssertFalse(controller.handleScroll(dx: 0, dy: 4))  // 该按钮未布防滚轮 → 不消费
+    }
+
     func testLongPressExecutesOnTimeout() {
         let b = bind(.longPress)
         Options.shared.buttons.binding = [b]

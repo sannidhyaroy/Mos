@@ -67,12 +67,14 @@ final class MouseGestureController {
         let originalDown: InputEvent
         let scheduler: GestureDeadlineScheduling
         let dragArmed: Bool
+        let scrollArmed: Bool
         init(recognizer: MouseGestureRecognizer, originalDown: InputEvent,
-             scheduler: GestureDeadlineScheduling, dragArmed: Bool) {
+             scheduler: GestureDeadlineScheduling, dragArmed: Bool, scrollArmed: Bool) {
             self.recognizer = recognizer
             self.originalDown = originalDown
             self.scheduler = scheduler
             self.dragArmed = dragArmed
+            self.scrollArmed = scrollArmed
         }
     }
 
@@ -102,6 +104,7 @@ final class MouseGestureController {
         guard !armed.isEmpty else { return false }
 
         let dragArmed = armed.contains(where: { $0.isDrag })
+        let scrollArmed = armed.contains(where: { $0.isScroll })
         let config = MouseGestureRecognizer.Config(
             armedGestures: armed,
             longPressDelay: longPressDelay,
@@ -113,7 +116,8 @@ final class MouseGestureController {
             recognizer: recognizer,
             originalDown: event,
             scheduler: schedulerFactory(),
-            dragArmed: dragArmed
+            dragArmed: dragArmed,
+            scrollArmed: scrollArmed
         )
         let code = event.code
         // weak session: 否则 session -> recognizer -> onRecognize -> session 形成循环引用.
@@ -135,6 +139,28 @@ final class MouseGestureController {
         session.recognizer.handleUp(at: naturalLocation(for: event), time: nowProvider())
         rescheduleOrCleanup(code: event.code)
         return true
+    }
+
+    /// 是否有按住中且布防了滚轮手势的按钮会话 (供 ScrollCore 低成本判断是否需要转发滚动).
+    var hasScrollArmedSession: Bool {
+        return sessions.values.contains(where: { $0.scrollArmed })
+    }
+
+    /// 处理滚轮滚动 (ScrollCore 在检测到真实鼠标滚动且存在滚轮手势会话时转发).
+    /// 返回是否有会话识别并触发了滚轮手势 (true = ScrollCore 应消费该滚动, 不滚动页面).
+    @discardableResult
+    func handleScroll(dx: CGFloat, dy: CGFloat) -> Bool {
+        guard !sessions.isEmpty else { return false }
+        let now = nowProvider()
+        var consumed = false
+        for code in Array(sessions.keys) {
+            guard let session = sessions[code], session.scrollArmed else { continue }
+            if session.recognizer.handleScroll(dx: dx, dy: dy, time: now) {
+                consumed = true
+            }
+            rescheduleOrCleanup(code: code)
+        }
+        return consumed
     }
 
     /// 处理物理拖拽 (motion tap 转发, code 来自当前按住的按钮号).

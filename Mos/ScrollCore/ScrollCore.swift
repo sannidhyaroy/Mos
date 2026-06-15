@@ -86,6 +86,16 @@ class ScrollCore {
         if ScrollUtils.shared.isRemoteSmoothedEvent(event) {
             return Unmanaged.passUnretained(event)
         }
+        // 滚轮手势: 若有按住且布防滚轮手势的按钮, 滚动用于触发手势动作而非滚动页面.
+        // 用原始 delta (轴1=垂直, 轴2=水平) 在翻转/平滑之前判定方向, 与录制捕获取同一份 delta.
+        if (hasVerticalDelta || hasHorizontalDelta),
+           MouseGestureController.shared.hasScrollArmedSession {
+            let rawDy = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
+            let rawDx = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+            if MouseGestureController.shared.handleScroll(dx: CGFloat(rawDx), dy: CGFloat(rawDy)) {
+                return nil  // 消费滚动, 不滚动页面
+            }
+        }
         // 当鼠标输入, 根据需要执行翻转方向/平滑滚动
         // 获取事件目标
         let targetRunningApplication = ScrollUtils.shared.getRunningApplication(from: event)
