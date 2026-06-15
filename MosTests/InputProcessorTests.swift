@@ -1245,6 +1245,51 @@ final class MouseGestureRecognizerTests: XCTestCase {
         r.handleTimeout(time: 0.35)
         XCTAssertTrue(recognized().isEmpty)
     }
+
+    // MARK: - Scroll gestures
+
+    func testScrollGestureClassification() {
+        // 约定: dy>0 上, dy<0 下, dx>0 右, dx<0 左; 主轴取绝对值大者, 相等优先垂直.
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 0, dy: 5), .scrollUp)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 0, dy: -5), .scrollDown)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 5, dy: 0), .scrollRight)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: -5, dy: 0), .scrollLeft)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 1, dy: 10), .scrollUp)
+    }
+
+    func testScrollInArmedDirectionEmitsAndSuppressesClick() {
+        let (r, recognized) = makeRecognizer([.scrollUp])
+        r.handleDown(at: .zero, time: 0)
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: 3, time: 0.05))
+        r.handleUp(at: .zero, time: 0.1)
+        // 识别出 scrollUp, 抬起不再补单击
+        XCTAssertEqual(recognized(), [.scrollUp])
+    }
+
+    func testScrollRepeatsWithinSingleHold() {
+        let (r, recognized) = makeRecognizer([.scrollDown])
+        r.handleDown(at: .zero, time: 0)
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: -2, time: 0.05))
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: -2, time: 0.08))
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: -2, time: 0.11))
+        r.handleUp(at: .zero, time: 0.2)
+        XCTAssertEqual(recognized(), [.scrollDown, .scrollDown, .scrollDown])
+    }
+
+    func testScrollInUnarmedDirectionIsIgnored() {
+        let (r, recognized) = makeRecognizer([.scrollUp])
+        r.handleDown(at: .zero, time: 0)
+        XCTAssertFalse(r.handleScroll(dx: 0, dy: -3, time: 0.05))  // 向下未布防
+        r.handleUp(at: .zero, time: 0.1)
+        // 没识别出滚轮手势 → 抬起补单击
+        XCTAssertEqual(recognized(), [.click])
+    }
+
+    func testScrollIgnoredWhenNotPressed() {
+        let (r, recognized) = makeRecognizer([.scrollUp])
+        XCTAssertFalse(r.handleScroll(dx: 0, dy: 3, time: 0))  // 未按下
+        XCTAssertTrue(recognized().isEmpty)
+    }
 }
 
 // MARK: - Manual scheduler for deterministic controller tests

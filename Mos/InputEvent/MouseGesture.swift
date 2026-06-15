@@ -33,6 +33,14 @@ enum MouseGesture: String, Codable, Equatable, CaseIterable {
     case dragLeft
     /// 按住并向右拖拽
     case dragRight
+    /// 按住并向上滚动滚轮
+    case scrollUp
+    /// 按住并向下滚动滚轮
+    case scrollDown
+    /// 按住并向左滚动 (滚轮左倾 / 水平滚动)
+    case scrollLeft
+    /// 按住并向右滚动 (滚轮右倾 / 水平滚动)
+    case scrollRight
 
     // MARK: - 分类
 
@@ -50,6 +58,16 @@ enum MouseGesture: String, Codable, Equatable, CaseIterable {
     var isDrag: Bool {
         switch self {
         case .dragUp, .dragDown, .dragLeft, .dragRight:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 是否为滚轮类手势 (按住按钮 + 滚动)
+    var isScroll: Bool {
+        switch self {
+        case .scrollUp, .scrollDown, .scrollLeft, .scrollRight:
             return true
         default:
             return false
@@ -101,6 +119,10 @@ enum MouseGesture: String, Codable, Equatable, CaseIterable {
         case .dragDown:     return "gesture-drag-down"
         case .dragLeft:     return "gesture-drag-left"
         case .dragRight:    return "gesture-drag-right"
+        case .scrollUp:     return "gesture-scroll-up"
+        case .scrollDown:   return "gesture-scroll-down"
+        case .scrollLeft:   return "gesture-scroll-left"
+        case .scrollRight:  return "gesture-scroll-right"
         }
     }
 
@@ -123,6 +145,11 @@ enum MouseGesture: String, Codable, Equatable, CaseIterable {
         case .dragDown:     return "↓"
         case .dragLeft:     return "←"
         case .dragRight:    return "→"
+        // 滚轮用双线虚线箭头, 与实线拖拽箭头区分 (同一按钮可同时绑拖拽与滚轮)
+        case .scrollUp:     return "⇡"
+        case .scrollDown:   return "⇣"
+        case .scrollLeft:   return "⇠"
+        case .scrollRight:  return "⇢"
         }
     }
 }
@@ -138,5 +165,16 @@ extension MouseGesture {
             return dx >= 0 ? .dragRight : .dragLeft
         }
         return dy >= 0 ? .dragUp : .dragDown
+    }
+
+    /// 从一次滚轮位移判定方向手势.
+    /// 约定: dy 取 CGEvent scrollWheel 轴1 (垂直, 向上为正), dx 取轴2 (水平, 向右为正);
+    /// 录制捕获与运行时消费使用同一份原始 delta, 因此符号约定一致即可正确匹配.
+    /// 主轴取绝对值更大的方向; 垂直与水平相等时优先垂直.
+    static func scrollGesture(dx: CGFloat, dy: CGFloat) -> MouseGesture {
+        if abs(dy) >= abs(dx) {
+            return dy >= 0 ? .scrollUp : .scrollDown
+        }
+        return dx >= 0 ? .scrollRight : .scrollLeft
     }
 }

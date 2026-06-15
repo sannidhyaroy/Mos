@@ -90,6 +90,10 @@ final class MouseGestureRecognizer {
         config.armedGestures.contains(where: { $0.isDrag })
     }
 
+    private var hasArmedScroll: Bool {
+        config.armedGestures.contains(where: { $0.isScroll })
+    }
+
     private static func gesture(forClickCount count: Int) -> MouseGesture {
         switch count {
         case ..<2:  return .click
@@ -139,6 +143,23 @@ final class MouseGestureRecognizer {
         phase = .recognizedAwaitingRelease
         pendingDeadline = nil
         emit(direction)
+    }
+
+    /// 按住期间滚动滚轮.
+    /// 与拖拽不同, 滚轮手势可在一次按住内重复触发 (每个 detent 一次), 因此识别后停留在
+    /// `recognizedAwaitingRelease` (抑制抬起时的点击) 但仍接受后续滚动.
+    /// 返回是否识别并触发了一个已绑定的滚轮手势 (宿主据此决定是否消费该滚动事件).
+    @discardableResult
+    func handleScroll(dx: CGFloat, dy: CGFloat, time: TimeInterval) -> Bool {
+        guard hasArmedScroll else { return false }
+        guard phase == .pressed || phase == .recognizedAwaitingRelease else { return false }
+        guard dx != 0 || dy != 0 else { return false }
+        let direction = MouseGesture.scrollGesture(dx: dx, dy: dy)
+        guard config.armedGestures.contains(direction) else { return false }
+        phase = .recognizedAwaitingRelease
+        pendingDeadline = nil
+        emit(direction)
+        return true
     }
 
     /// 按钮抬起
