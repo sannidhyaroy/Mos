@@ -50,9 +50,14 @@ class KeyRecorder: NSObject {
     static let TIMEOUT: TimeInterval = 10.0
     private static let recordedFeedbackDelay: TimeInterval = 0.7
     private static let duplicateFeedbackDelay: TimeInterval = 1.0
+    /// divert 落地等待窗口: combination 模式且存在 Logi candidate 时, 延迟此时间再装载
+    /// CGEvent tap, 给 HID++ divert 写入在设备上生效的时间 (BLE 往返无同步确认, 取保守值).
+    private static let recordingDivertSettleDelay: TimeInterval = 0.35
     static let FLAG_CHANGE_NOTI_NAME = NSNotification.Name("RECORD_FLAG_CHANGE_NOTI_NAME")
     static let FINISH_NOTI_NAME = NSNotification.Name("RECORD_FINISH_NOTI_NAME")
     static let CANCEL_NOTI_NAME = NSNotification.Name("RECORD_CANCEL_NOTI_NAME")
+    /// 非主键鼠标 down/up 事件 (combination 模式下用于手势捕获)
+    static let MOUSE_INPUT_NOTI_NAME = NSNotification.Name("RECORD_MOUSE_INPUT_NOTI_NAME")
 
     // Delegate
     weak var delegate: KeyRecorderDelegate?
@@ -65,6 +70,9 @@ class KeyRecorder: NSObject {
     private let invalidKeyThreshold = 5 // 显示 ESC 提示的阈值
     private var recordingMode: KeyRecordingMode = .combination // 当前录制模式
     private var hidEventObserver: NSObjectProtocol?  // HID++ 事件监听 (录制期间)
+    // 手势捕获 (仅 combination 模式 + 非主键鼠标按钮)
+    private var gestureCapture: MouseGestureCapture?
+    private var gestureBaseEvent: InputEvent?  // 按下时的按钮 + 修饰键, 识别完成后附加 gesture
     // Adaptive mode state
     private enum AdaptiveState {
         case idle
@@ -109,9 +117,11 @@ class KeyRecorder: NSObject {
         let leftDown = CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
         let rightDown = CGEventMask(1 << CGEventType.rightMouseDown.rawValue)
         let otherDown = CGEventMask(1 << CGEventType.otherMouseDown.rawValue)
+        let otherUp = CGEventMask(1 << CGEventType.otherMouseUp.rawValue)
         let keyDown = CGEventMask(1 << CGEventType.keyDown.rawValue)
         let flagsChanged = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
-        return leftDown | rightDown | otherDown | keyDown | flagsChanged
+        // otherUp 用于手势捕获 (识别长按/连击/拖拽需要抬起事件)
+        return leftDown | rightDown | otherDown | otherUp | keyDown | flagsChanged
     }
     
     // MARK: - Recording Manager
@@ -133,10 +143,26 @@ class KeyRecorder: NSObject {
         // 立即显示 Popover (不等待 HID++ divert)
         keyPopover = KeyPopover()
         keyPopover?.show(at: sourceView)
-        // 异步 divert 所有 Logitech 按键 (BLE 通信有延迟)
-        DispatchQueue.main.async {
-            LogiCenter.shared.beginKeyRecording()
+        // 同步请求 divert (在装载事件捕获之前), 返回是否有 Logi candidate 被 divert.
+        let didDivertLogiCandidate = LogiCenter.shared.beginKeyRecording()
+        // 有 Logi candidate 且 combination 模式: 延迟装载 CGEvent tap, 等 divert 在设备上落地,
+        // 否则首次按下时 tap 会抢到设备未 divert 的回退键 (如 Fn+Ctrl+Up), 录成键盘组合.
+        // 无 Logi 设备 / 非 combination 模式: 立即装载, 不引入额外延迟.
+        if didDivertLogiCandidate && mode == .combination {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.recordingDivertSettleDelay) { [weak self] in
+                // keyPopover 在 stopRecording 中被同步置 nil (isRecording 则延迟 0.5s 才复位),
+                // 用它判定 settle 期间是否已被取消, 避免取消后又把 tap 装载回来.
+                guard let self = self, self.isRecording, self.keyPopover != nil else { return }
+                self.armRecordingCapture()
+            }
+        } else {
+            armRecordingCapture()
         }
+    }
+
+    /// 装载事件捕获 (通知观察者 + CGEvent tap + HID++ 观察者 + 超时定时器).
+    /// 单独成方法以便 divert settle 期间延迟装载, 避免抢到设备回退键.
+    private func armRecordingCapture() {
         // 监听事件
         do {
             // 监听回调事件通知
@@ -160,6 +186,13 @@ class KeyRecorder: NSObject {
                 name: KeyRecorder.CANCEL_NOTI_NAME,
                 object: nil
             )
+            // 监听非主键鼠标 down/up (手势捕获)
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleMouseInputEvent(_:)),
+                name: KeyRecorder.MOUSE_INPUT_NOTI_NAME,
+                object: nil
+            )
             // 启动拦截器
             interceptor = try Interceptor(
                 event: eventMask,
@@ -178,11 +211,19 @@ class KeyRecorder: NSObject {
                                 object: recordedEvent
                             )
                         }
-                    case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-                        // 鼠标按键
+                    case .leftMouseDown, .rightMouseDown:
+                        // 主键: 不参与手势, 直接完成 (仍受 isRecordable 约束)
                         DispatchQueue.main.async {
                             NotificationCenter.default.post(
                                 name: KeyRecorder.FINISH_NOTI_NAME,
+                                object: recordedEvent
+                            )
+                        }
+                    case .otherMouseDown, .otherMouseUp:
+                        // 非主键: 走手势捕获通道 (combination 模式), 其它模式按 down 立即完成
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(
+                                name: KeyRecorder.MOUSE_INPUT_NOTI_NAME,
                                 object: recordedEvent
                             )
                         }
@@ -221,6 +262,15 @@ class KeyRecorder: NSObject {
             ) { [weak self] notification in
                 guard let self = self, self.isRecording, !self.isRecorded else { return }
                 guard let mosEvent = notification.userInfo?["event"] as? InputEvent else { return }
+                // 非主键鼠标按钮 + combination 模式: 走手势捕获 (需要 down/up).
+                // 主键 (原生 0/1 与 Logi 转发的左右键 1003/1004) 不走手势捕获, 作为普通点击录制.
+                // HID++ 不带指针坐标, 以当前指针位置作为拖拽锚点 (物理移动仍由 motion tap 捕获).
+                if self.recordingMode == .combination,
+                   mosEvent.type == .mouse,
+                   !MouseGesture.isPrimaryMouseButton(mosEvent.code) {
+                    self.routeMouseGestureInput(mosEvent, naturalLocation: NSEvent.mouseLocation)
+                    return
+                }
                 guard mosEvent.phase == .down else { return }
                 NotificationCenter.default.post(
                     name: KeyRecorder.FINISH_NOTI_NAME,
@@ -437,6 +487,63 @@ class KeyRecorder: NSObject {
         NSLog("[EventRecorder] Recording cancelled by ESC key")
         stopRecording()
     }
+    // MARK: - Mouse Gesture Capture (combination 模式 + 非主键鼠标)
+
+    @objc private func handleMouseInputEvent(_ notification: NSNotification) {
+        guard isRecording && !isRecorded else { return }
+        guard let object = notification.object,
+              CFGetTypeID(object as CFTypeRef) == CGEvent.typeID else { return }
+        let cgEvent = object as! CGEvent
+        let mosEvent = InputEvent(fromCGEvent: cgEvent)
+        let location = MouseGestureCapture.naturalLocation(fromCGPoint: cgEvent.location)
+        routeMouseGestureInput(mosEvent, naturalLocation: location)
+    }
+
+    /// HID++ 来源的非主键鼠标 down/up (combination 模式手势捕获)
+    private func routeMouseGestureInput(_ event: InputEvent, naturalLocation: CGPoint) {
+        // 仅 combination 模式做手势捕获; 其它模式 (singleKey/adaptive) 按下即完成.
+        guard recordingMode == .combination else {
+            if event.phase == .down {
+                NotificationCenter.default.post(name: KeyRecorder.FINISH_NOTI_NAME, object: event)
+            }
+            return
+        }
+
+        switch event.phase {
+        case .down:
+            gestureBaseEvent = event
+            ensureGestureCapture()
+            gestureCapture?.down(at: naturalLocation)
+            startTimeoutTimer()  // 给用户时间完成手势
+            keyPopover?.keyPreview.update(from: event.displayComponents, status: .recording)
+        case .up:
+            gestureCapture?.up(at: naturalLocation)
+        }
+    }
+
+    private func ensureGestureCapture() {
+        guard gestureCapture == nil else { return }
+        let capture = MouseGestureCapture()
+        capture.onRecognized = { [weak self] gesture in
+            self?.completeGestureCapture(gesture)
+        }
+        gestureCapture = capture
+    }
+
+    private func completeGestureCapture(_ gesture: MouseGesture) {
+        guard isRecording, !isRecorded, let base = gestureBaseEvent else { return }
+        NotificationCenter.default.post(
+            name: KeyRecorder.FINISH_NOTI_NAME,
+            object: base.withGesture(gesture)
+        )
+    }
+
+    private func cancelGestureCapture() {
+        gestureCapture?.cancel()
+        gestureCapture = nil
+        gestureBaseEvent = nil
+    }
+
     @objc private func handleRecordedEvent(_ notification: NSNotification) {
         guard isRecording else { return }
 
@@ -516,12 +623,15 @@ class KeyRecorder: NSObject {
         adaptiveState = .idle
         previousAdaptiveFlags = []
         modifierReleaseTimestamps.removeAll()
+        // 清理手势捕获
+        cancelGestureCapture()
         // 取消通知和监听
         interceptor?.stop()
         interceptor = nil
         NotificationCenter.default.removeObserver(self, name: KeyRecorder.FINISH_NOTI_NAME, object: nil)
         NotificationCenter.default.removeObserver(self, name: KeyRecorder.FLAG_CHANGE_NOTI_NAME, object: nil)
         NotificationCenter.default.removeObserver(self, name: KeyRecorder.CANCEL_NOTI_NAME, object: nil)
+        NotificationCenter.default.removeObserver(self, name: KeyRecorder.MOUSE_INPUT_NOTI_NAME, object: nil)
         if let observer = hidEventObserver {
             NotificationCenter.default.removeObserver(observer)
             hidEventObserver = nil

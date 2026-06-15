@@ -115,6 +115,7 @@ class KeyPreview: NSStackView {
     private func createKeyViews() {
         var i = 0
         var viewIndex = 0  // 用于决定是否加 "+" 分隔符
+        var nameAssigned = false  // 名称 pill 只有一个 (首个非等待/非修饰键组件), 仅它允许截断
         while i < keyComponents.count {
             let component = keyComponents[i]
 
@@ -134,12 +135,17 @@ class KeyPreview: NSStackView {
             let isWaiting = (component == KeyPreview.WAITING_WORDING)
 
             if nextIsLogi && !isWaiting {
+                // 带 Logi tag 的一律是按键名称 pill → 允许截断
                 let keyView = createKeyViewWithBrandTag(for: component, brand: .logi)
                 addArrangedSubview(keyView)
                 keyViews.append(keyView)
+                nameAssigned = true
                 i += 2  // 跳过 [Logi]
             } else {
-                let keyView = createSingleKeyView(for: component, isWaiting: isWaiting)
+                // 名称 pill = 首个非等待占位、非纯修饰键字符串的组件; 后续徽章/修饰键保持原尺寸.
+                let isName = !isWaiting && !nameAssigned && !KeyPreview.isModifierGlyphString(component)
+                if isName { nameAssigned = true }
+                let keyView = createSingleKeyView(for: component, isWaiting: isWaiting, truncatable: isName)
                 addArrangedSubview(keyView)
                 keyViews.append(keyView)
                 if isWaiting, let container = keyView as? KeyComponentContainer {
@@ -151,6 +157,17 @@ class KeyPreview: NSStackView {
         }
     }
 
+    /// 是否为纯修饰键字形串 (如 "⌃ ⌘", "⇧ Fn ⌃ ⌥ ⌘"); 用于把名称 pill 与修饰键 pill 区分开.
+    /// 修饰键 pill 始终短且不应被截断, 截断只施加在按键名称 pill 上.
+    private static let modifierGlyphs: Set<String> = ["⇧", "Fn", "⌃", "⌥", "⌘"]
+    private static func isModifierGlyphString(_ s: String) -> Bool {
+        let parts = s.split(separator: " ").map(String.init)
+        return !parts.isEmpty && parts.allSatisfy { modifierGlyphs.contains($0) }
+    }
+
+    /// 名称 pill 的最大宽度上限; 触发区有空余时长名称最多显示到此宽度, 再长则尾部截断.
+    static let MAX_NAME_PILL_WIDTH = CGFloat(140)
+
     /// 创建带嵌套品牌 tag 的按键视图 (按键名 + 小 tag 在同一个容器内)
     private func createKeyViewWithBrandTag(for text: String, brand: BrandTagConfig) -> NSView {
         let container = KeyComponentContainer(keyStatus: status, isWaiting: false)
@@ -159,12 +176,13 @@ class KeyPreview: NSStackView {
         let tagView = BrandTag.createTagView(brand: brand)
         container.addSubview(tagView)
 
-        // 按键名标签
+        // 按键名标签 (Logi 名称可能很长, 允许尾部截断)
         let label = NSTextField(labelWithString: text)
         label.font = NSFont.systemFont(ofSize: KeyPreview.FONT_SIZE, weight: .medium)
         label.textColor = (status == .recorded || status == .duplicate) ? NSColor.white : NSColor.labelColor
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
+        KeyPreview.applyTruncation(to: label)
         container.addSubview(label)
 
         NSLayoutConstraint.activate([
@@ -173,12 +191,13 @@ class KeyPreview: NSStackView {
             label.leadingAnchor.constraint(equalTo: tagView.trailingAnchor, constant: 4),
             label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6.5),
+            label.widthAnchor.constraint(lessThanOrEqualToConstant: KeyPreview.MAX_NAME_PILL_WIDTH),
             container.heightAnchor.constraint(equalToConstant: KeyPreview.VIEW_SIZE),
         ])
 
         return container
     }
-    private func createSingleKeyView(for text: String, isWaiting: Bool) -> NSView {
+    private func createSingleKeyView(for text: String, isWaiting: Bool, truncatable: Bool = false) -> NSView {
         // 创建一个能动态响应外观变化的容器
         let container = KeyComponentContainer(keyStatus: status, isWaiting: isWaiting)
 
@@ -191,15 +210,29 @@ class KeyPreview: NSStackView {
         container.addSubview(label)
 
         // 设置约束
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             label.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             container.widthAnchor.constraint(greaterThanOrEqualTo: label.widthAnchor, constant: 12),
             container.widthAnchor.constraint(greaterThanOrEqualToConstant: KeyPreview.VIEW_SIZE),
             container.heightAnchor.constraint(equalToConstant: KeyPreview.VIEW_SIZE),
-        ])
+        ]
+        // 仅名称 pill 允许截断 (修饰键/徽章/等待占位保持原尺寸不被压缩).
+        if truncatable {
+            KeyPreview.applyTruncation(to: label)
+            constraints.append(label.widthAnchor.constraint(lessThanOrEqualToConstant: KeyPreview.MAX_NAME_PILL_WIDTH))
+        }
+        NSLayoutConstraint.activate(constraints)
 
         return container
+    }
+
+    /// 让标签单行尾部截断, 并降低横向抗压缩优先级, 使其在触发区宽度不足时优先收缩出 "…".
+    private static func applyTruncation(to label: NSTextField) {
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.cell?.truncatesLastVisibleLine = true
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 }
 

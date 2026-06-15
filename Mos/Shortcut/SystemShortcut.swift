@@ -148,6 +148,14 @@ struct SystemShortcut {
                 case "modifierControl": return "control"
                 case "modifierCommand": return "command"
                 case "modifierFn": return "fn"
+                // 媒体键
+                case "mediaVolumeUp": return "speaker.wave.3"
+                case "mediaVolumeDown": return "speaker.wave.1"
+                case "mediaMute": return "speaker.slash"
+                case "mediaBrightnessUp": return "sun.max"
+                case "mediaBrightnessDown": return "sun.min"
+                case "mediaKeyboardBacklightUp": return "keyboard.badge.ellipsis"
+                case "mediaKeyboardBacklightDown": return "keyboard"
                 // Logi
                 case "logiSmartShiftToggle": return "gearshape.2"
                 case "logiDPICycleUp": return "arrow.up.circle"
@@ -333,6 +341,11 @@ struct SystemShortcut {
         "mosScrollDash": mosScrollDash,
         "mosScrollToggle": mosScrollToggle,
         "mosScrollBlock": mosScrollBlock,
+        // 媒体键 (音量/亮度/键盘背光)
+        "mediaVolumeUp": mediaVolumeUp, "mediaVolumeDown": mediaVolumeDown, "mediaMute": mediaMute,
+        "mediaBrightnessUp": mediaBrightnessUp, "mediaBrightnessDown": mediaBrightnessDown,
+        "mediaKeyboardBacklightUp": mediaKeyboardBacklightUp,
+        "mediaKeyboardBacklightDown": mediaKeyboardBacklightDown,
         // 修饰键
         "modifierShift": modifierShift, "modifierOption": modifierOption,
         "modifierControl": modifierControl, "modifierCommand": modifierCommand,
@@ -398,9 +411,10 @@ struct SystemShortcut {
         ("categoryNavigation", [
             navigateBack, navigateForward, previousTab, nextTab, switchTabLeft, switchTabRight
         ]),
-        // ("categoryAccessibility", [  // 暂时不提供, 有问题
-        //     invertColors, zoomIn, zoomOut
-        // ]),
+        ("categoryAccessibility", [
+            // 缩放依赖 系统设置 > 辅助功能 > 缩放 中的快捷键开关; 颜色反转始终可用.
+            zoomIn, zoomOut, invertColors
+        ]),
     ]
 
     // MARK: - Mouse Button Actions
@@ -420,6 +434,18 @@ struct SystemShortcut {
     static let mosScrollDash = Shortcut("mosScrollDash", 0xFFFC, NSEvent.ModifierFlags(rawValue: 0), executionMode: .stateful)
     static let mosScrollToggle = Shortcut("mosScrollToggle", 0xFFFC, NSEvent.ModifierFlags(rawValue: 1), executionMode: .stateful)
     static let mosScrollBlock = Shortcut("mosScrollBlock", 0xFFFC, NSEvent.ModifierFlags(rawValue: 2), executionMode: .stateful)
+
+    // MARK: - Media Key Actions
+    // 系统媒体键 (音量/亮度/键盘背光), 属 NSEvent.systemDefined (NX_KEYTYPE_*), 非普通 CGKeyCode.
+    // 由 ShortcutExecutor 合成对应的 systemDefined 事件; code=0xFFFB 占位, modifiers.rawValue 区分.
+    // trigger 语义: 每次激活敲一下媒体键 (与滚轮手势配对时, 每个 detent 调一档).
+    static let mediaVolumeUp = Shortcut("mediaVolumeUp", 0xFFFB, NSEvent.ModifierFlags(rawValue: 0))
+    static let mediaVolumeDown = Shortcut("mediaVolumeDown", 0xFFFB, NSEvent.ModifierFlags(rawValue: 1))
+    static let mediaMute = Shortcut("mediaMute", 0xFFFB, NSEvent.ModifierFlags(rawValue: 2))
+    static let mediaBrightnessUp = Shortcut("mediaBrightnessUp", 0xFFFB, NSEvent.ModifierFlags(rawValue: 3))
+    static let mediaBrightnessDown = Shortcut("mediaBrightnessDown", 0xFFFB, NSEvent.ModifierFlags(rawValue: 4))
+    static let mediaKeyboardBacklightUp = Shortcut("mediaKeyboardBacklightUp", 0xFFFB, NSEvent.ModifierFlags(rawValue: 5))
+    static let mediaKeyboardBacklightDown = Shortcut("mediaKeyboardBacklightDown", 0xFFFB, NSEvent.ModifierFlags(rawValue: 6))
 
     // MARK: - Modifier Key Actions
     // 预定义单修饰键动作 (复用 custom modifier 的 stateful 执行语义)
@@ -462,6 +488,15 @@ struct SystemShortcut {
         ]
     )
 
+    /// 媒体键动作分类 (音量/亮度/键盘背光)
+    static let mediaKeysCategory: (category: String, shortcuts: [Shortcut]) = (
+        "categoryMediaKeys", [
+            mediaVolumeUp, mediaVolumeDown, mediaMute,
+            mediaBrightnessUp, mediaBrightnessDown,
+            mediaKeyboardBacklightUp, mediaKeyboardBacklightDown
+        ]
+    )
+
     /// Mos 鼠标滚动动作分类
     static let mosMouseScrollCategory: (category: String, shortcuts: [Shortcut]) = (
         "categoryMosMouseScroll", [
@@ -501,6 +536,7 @@ struct SystemShortcut {
         case "categoryScreenshot": return "camera.viewfinder"
         case "categoryNavigation": return "arrow.left.and.right"
         case "categoryAccessibility": return "eye"
+        case "categoryMediaKeys": return "slider.horizontal.3"
         case "categoryModifierKeys": return "command"
         case "categoryMouseButtons": return "computermouse"
         case "categoryMosMouseScroll": return "scroll"

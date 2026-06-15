@@ -281,6 +281,25 @@ final class InputProcessorTests: XCTestCase {
         }
     }
 
+    func testResolveAction_mediaKeysResolveToMediaKeyActionAndAreTrigger() {
+        let expected: [String: MediaKeyActionKind] = [
+            "mediaVolumeUp": .volumeUp, "mediaVolumeDown": .volumeDown, "mediaMute": .mute,
+            "mediaBrightnessUp": .brightnessUp, "mediaBrightnessDown": .brightnessDown,
+            "mediaKeyboardBacklightUp": .keyboardBacklightUp,
+            "mediaKeyboardBacklightDown": .keyboardBacklightDown,
+        ]
+        for (identifier, kind) in expected {
+            guard let action = ShortcutExecutor.shared.resolveAction(named: identifier) else {
+                return XCTFail("Expected \(identifier) to resolve")
+            }
+            guard case .mediaKey(let resolvedKind) = action else {
+                return XCTFail("Expected \(identifier) to resolve to .mediaKey")
+            }
+            XCTAssertEqual(resolvedKind, kind)
+            XCTAssertEqual(action.executionMode, .trigger)
+        }
+    }
+
     func testProcess_mosScrollDash_downAndUpControlsDashState() {
         let trigger = RecordedEvent(type: .mouse, code: 3, modifiers: 0, displayComponents: ["🖱4"], deviceFilter: nil)
         let binding = ButtonBinding(triggerEvent: trigger, systemShortcutName: "mosScrollDash", isEnabled: true)
@@ -1096,4 +1115,448 @@ final class InputProcessorTests: XCTestCase {
         XCTAssertFalse(contains(.keyUp, in: core.primaryObservationEventMask))
     }
 
+}
+
+// MARK: - MouseGesture model
+final class MouseGestureModelTests: XCTestCase {
+
+    func testClassification() {
+        XCTAssertTrue(MouseGesture.click.isClick)
+        XCTAssertFalse(MouseGesture.click.requiresDeferredRecognition)
+        XCTAssertTrue(MouseGesture.doubleClick.requiresDeferredRecognition)
+        XCTAssertTrue(MouseGesture.longPress.requiresHold)
+        XCTAssertFalse(MouseGesture.doubleClick.requiresHold)
+        XCTAssertTrue(MouseGesture.dragLeft.isDrag)
+        XCTAssertFalse(MouseGesture.longPress.isDrag)
+        XCTAssertEqual(MouseGesture.click.clickCount, 1)
+        XCTAssertEqual(MouseGesture.doubleClick.clickCount, 2)
+        XCTAssertEqual(MouseGesture.tripleClick.clickCount, 3)
+        XCTAssertNil(MouseGesture.dragUp.clickCount)
+    }
+
+    func testPrimaryButtonsOnlyAllowClick() {
+        // 原生左键 (0) / 右键 (1) 以及 Logi 转发的左右键 (1003/1004) 只允许单击.
+        for code: UInt16 in [0, 1, 1003, 1004] {
+            XCTAssertTrue(MouseGesture.isPrimaryMouseButton(code), "code \(code) 应判定为主键")
+            XCTAssertTrue(MouseGesture.isAllowed(.click, forMouseCode: code))
+            XCTAssertFalse(MouseGesture.isAllowed(.doubleClick, forMouseCode: code))
+            XCTAssertFalse(MouseGesture.isAllowed(.longPress, forMouseCode: code))
+            XCTAssertFalse(MouseGesture.isAllowed(.dragRight, forMouseCode: code))
+        }
+        // 非主键 (普通后退键 3 / Logi 手势键 1000 / Logi 中键 1005) 允许全部手势
+        XCTAssertFalse(MouseGesture.isPrimaryMouseButton(3))
+        XCTAssertFalse(MouseGesture.isPrimaryMouseButton(1000))
+        XCTAssertFalse(MouseGesture.isPrimaryMouseButton(1005))
+        XCTAssertTrue(MouseGesture.isAllowed(.doubleClick, forMouseCode: 3))
+        XCTAssertTrue(MouseGesture.isAllowed(.dragLeft, forMouseCode: 1000))
+    }
+
+    func testDragDirectionClassification() {
+        // 自然坐标: +x 右, +y 上
+        XCTAssertEqual(MouseGesture.dragGesture(dx: 20, dy: 1), .dragRight)
+        XCTAssertEqual(MouseGesture.dragGesture(dx: -20, dy: 1), .dragLeft)
+        XCTAssertEqual(MouseGesture.dragGesture(dx: 1, dy: 20), .dragUp)
+        XCTAssertEqual(MouseGesture.dragGesture(dx: 1, dy: -20), .dragDown)
+        // 水平/垂直相等优先水平
+        XCTAssertEqual(MouseGesture.dragGesture(dx: 10, dy: 10), .dragRight)
+    }
+
+    func testBadgeOmittedForClick() {
+        XCTAssertNil(MouseGesture.click.displayBadgeComponent)
+        XCTAssertNotNil(MouseGesture.longPress.displayBadgeComponent)
+    }
+}
+
+// MARK: - MouseGestureRecognizer (纯状态机)
+final class MouseGestureRecognizerTests: XCTestCase {
+
+    private func makeRecognizer(_ armed: Set<MouseGesture>) -> (MouseGestureRecognizer, () -> [MouseGesture]) {
+        var recognized: [MouseGesture] = []
+        let config = MouseGestureRecognizer.Config(
+            armedGestures: armed,
+            longPressDelay: 0.35,
+            multiClickInterval: 0.30,
+            dragDistance: 10
+        )
+        let recognizer = MouseGestureRecognizer(config: config)
+        recognizer.onRecognize = { recognized.append($0) }
+        return (recognizer, { recognized })
+    }
+
+    func testSingleClickWhenOnlyDoubleArmed_resolvesToClickAfterTimeout() {
+        let (r, recognized) = makeRecognizer([.doubleClick])
+        r.handleDown(at: .zero, time: 0)
+        r.handleUp(at: .zero, time: 0.05)
+        XCTAssertEqual(r.pendingDeadline ?? -1, 0.35, accuracy: 1e-9)
+        r.handleTimeout(time: 0.35)
+        XCTAssertEqual(recognized(), [.click])
+    }
+
+    func testDoubleClick() {
+        let (r, recognized) = makeRecognizer([.doubleClick])
+        r.handleDown(at: .zero, time: 0)
+        r.handleUp(at: .zero, time: 0.05)
+        r.handleDown(at: .zero, time: 0.10)
+        r.handleUp(at: .zero, time: 0.12)
+        XCTAssertEqual(recognized(), [.doubleClick])
+    }
+
+    func testTripleClick() {
+        let (r, recognized) = makeRecognizer([.tripleClick])
+        r.handleDown(at: .zero, time: 0);   r.handleUp(at: .zero, time: 0.03)
+        r.handleDown(at: .zero, time: 0.06); r.handleUp(at: .zero, time: 0.09)
+        r.handleDown(at: .zero, time: 0.12); r.handleUp(at: .zero, time: 0.15)
+        XCTAssertEqual(recognized(), [.tripleClick])
+    }
+
+    func testLongPress() {
+        let (r, recognized) = makeRecognizer([.longPress])
+        r.handleDown(at: .zero, time: 0)
+        XCTAssertEqual(r.pendingDeadline ?? -1, 0.35, accuracy: 1e-9)
+        r.handleTimeout(time: 0.35)
+        r.handleUp(at: .zero, time: 0.5)
+        XCTAssertEqual(recognized(), [.longPress])
+    }
+
+    func testLongPressArmedButQuickReleaseIsClick() {
+        let (r, recognized) = makeRecognizer([.longPress])
+        r.handleDown(at: .zero, time: 0)
+        r.handleUp(at: .zero, time: 0.1)
+        XCTAssertEqual(recognized(), [.click])
+    }
+
+    func testDragInArmedDirection() {
+        let (r, recognized) = makeRecognizer([.dragRight])
+        r.handleDown(at: CGPoint(x: 0, y: 0), time: 0)
+        r.handleMove(to: CGPoint(x: 20, y: 1), time: 0.05)
+        r.handleUp(at: CGPoint(x: 20, y: 1), time: 0.1)
+        XCTAssertEqual(recognized(), [.dragRight])
+    }
+
+    func testDragInUnarmedDirectionEmitsNothing() {
+        let (r, recognized) = makeRecognizer([.dragRight])
+        r.handleDown(at: CGPoint(x: 0, y: 0), time: 0)
+        r.handleMove(to: CGPoint(x: -20, y: 0), time: 0.05)
+        r.handleUp(at: CGPoint(x: -20, y: 0), time: 0.1)
+        XCTAssertTrue(recognized().isEmpty)
+    }
+
+    func testSmallMovementIsNotDrag() {
+        let (r, recognized) = makeRecognizer([.dragRight])
+        r.handleDown(at: CGPoint(x: 0, y: 0), time: 0)
+        r.handleMove(to: CGPoint(x: 5, y: 0), time: 0.05)
+        r.handleUp(at: CGPoint(x: 5, y: 0), time: 0.1)
+        // 拖拽未达阈值, 且无多击布防 → 当作单击
+        XCTAssertEqual(recognized(), [.click])
+    }
+
+    func testLongPressAndDoubleArmed_holdYieldsLongPress() {
+        let (r, recognized) = makeRecognizer([.longPress, .doubleClick])
+        r.handleDown(at: .zero, time: 0)
+        r.handleTimeout(time: 0.35)
+        XCTAssertEqual(recognized(), [.longPress])
+    }
+
+    func testCancelEmitsNothing() {
+        let (r, recognized) = makeRecognizer([.longPress])
+        r.handleDown(at: .zero, time: 0)
+        r.cancel()
+        r.handleTimeout(time: 0.35)
+        XCTAssertTrue(recognized().isEmpty)
+    }
+
+    // MARK: - Scroll gestures
+
+    func testScrollGestureClassification() {
+        // 约定: dy>0 上, dy<0 下, dx>0 右, dx<0 左; 主轴取绝对值大者, 相等优先垂直.
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 0, dy: 5), .scrollUp)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 0, dy: -5), .scrollDown)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 5, dy: 0), .scrollRight)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: -5, dy: 0), .scrollLeft)
+        XCTAssertEqual(MouseGesture.scrollGesture(dx: 1, dy: 10), .scrollUp)
+    }
+
+    func testScrollInArmedDirectionEmitsAndSuppressesClick() {
+        let (r, recognized) = makeRecognizer([.scrollUp])
+        r.handleDown(at: .zero, time: 0)
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: 3, time: 0.05))
+        r.handleUp(at: .zero, time: 0.1)
+        // 识别出 scrollUp, 抬起不再补单击
+        XCTAssertEqual(recognized(), [.scrollUp])
+    }
+
+    func testScrollRepeatsWithinSingleHold() {
+        let (r, recognized) = makeRecognizer([.scrollDown])
+        r.handleDown(at: .zero, time: 0)
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: -2, time: 0.05))
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: -2, time: 0.08))
+        XCTAssertTrue(r.handleScroll(dx: 0, dy: -2, time: 0.11))
+        r.handleUp(at: .zero, time: 0.2)
+        XCTAssertEqual(recognized(), [.scrollDown, .scrollDown, .scrollDown])
+    }
+
+    func testScrollInUnarmedDirectionIsIgnored() {
+        let (r, recognized) = makeRecognizer([.scrollUp])
+        r.handleDown(at: .zero, time: 0)
+        XCTAssertFalse(r.handleScroll(dx: 0, dy: -3, time: 0.05))  // 向下未布防
+        r.handleUp(at: .zero, time: 0.1)
+        // 没识别出滚轮手势 → 抬起补单击
+        XCTAssertEqual(recognized(), [.click])
+    }
+
+    func testScrollIgnoredWhenNotPressed() {
+        let (r, recognized) = makeRecognizer([.scrollUp])
+        XCTAssertFalse(r.handleScroll(dx: 0, dy: 3, time: 0))  // 未按下
+        XCTAssertTrue(recognized().isEmpty)
+    }
+}
+
+// MARK: - Manual scheduler for deterministic controller tests
+private final class ManualGestureScheduler: GestureDeadlineScheduling {
+    private(set) var pending: (() -> Void)?
+    private(set) var fireAt: TimeInterval?
+    var isScheduled: Bool { pending != nil }
+    func schedule(fireAt: TimeInterval, now: TimeInterval, action: @escaping () -> Void) {
+        self.fireAt = fireAt
+        self.pending = action
+    }
+    func cancel() {
+        fireAt = nil
+        pending = nil
+    }
+    func fire() {
+        let action = pending
+        cancel()
+        action?()
+    }
+}
+
+// MARK: - MouseGestureController (注入计时/执行 seam, 确定性测试)
+final class MouseGestureControllerTests: XCTestCase {
+    private var time: TimeInterval = 0
+    private var scheduler = ManualGestureScheduler()
+    private var controller = MouseGestureController()
+    private var executed: [ButtonBinding] = []
+    private var replays = 0
+
+    override func setUp() {
+        super.setUp()
+        Options.shared.buttons.binding = []
+        ButtonUtils.shared.invalidateCache()
+        time = 0
+        executed = []
+        replays = 0
+        scheduler = ManualGestureScheduler()
+        controller = MouseGestureController()
+        controller.nowProvider = { [weak self] in self?.time ?? 0 }
+        controller.schedulerFactory = { [weak self] in self?.scheduler ?? ManualGestureScheduler() }
+        controller.actionExecutor = { [weak self] binding, _ in self?.executed.append(binding) }
+        controller.clickReplayer = { [weak self] _ in self?.replays += 1 }
+        controller.motionTracking = { _ in }
+    }
+
+    override func tearDown() {
+        Options.shared.buttons.binding = []
+        ButtonUtils.shared.invalidateCache()
+        super.tearDown()
+    }
+
+    private func mouse(_ phase: InputPhase, code: UInt16 = 3, modifiers: CGEventFlags = []) -> InputEvent {
+        InputEvent(type: .mouse, code: code, modifiers: modifiers, phase: phase, source: .hidPP, device: nil)
+    }
+
+    private func bind(_ gesture: MouseGesture, code: UInt16 = 3, name: String = "custom::56:0") -> ButtonBinding {
+        let trigger = RecordedEvent(type: .mouse, code: code, modifiers: 0, deviceFilter: nil, gesture: gesture)
+        return ButtonBinding(triggerEvent: trigger, systemShortcutName: name, isEnabled: true)
+    }
+
+    func testHandleDownReturnsFalseWhenNoNonClickGestureArmed() {
+        Options.shared.buttons.binding = [bind(.click)]
+        ButtonUtils.shared.invalidateCache()
+        XCTAssertFalse(controller.handleDown(mouse(.down)))
+    }
+
+    func testDoubleClickExecutesBinding() {
+        let b = bind(.doubleClick)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        time = 0.05; XCTAssertTrue(controller.handleUp(mouse(.up)))
+        XCTAssertTrue(scheduler.isScheduled)
+        time = 0.10; XCTAssertTrue(controller.handleDown(mouse(.down)))
+        time = 0.12; XCTAssertTrue(controller.handleUp(mouse(.up)))
+
+        XCTAssertEqual(executed.map(\.id), [b.id])
+        XCTAssertEqual(replays, 0)
+    }
+
+    func testSingleClickOnDoubleOnlyButtonReplaysPhysicalClick() {
+        let b = bind(.doubleClick)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        time = 0.05; XCTAssertTrue(controller.handleUp(mouse(.up)))
+        time = 0.35; scheduler.fire()
+
+        XCTAssertTrue(executed.isEmpty)
+        XCTAssertEqual(replays, 1)
+    }
+
+    func testClickAndDoubleArmed_singleClickExecutesClickBinding() {
+        let clickB = bind(.click, name: "custom::58:0")
+        let doubleB = bind(.doubleClick, name: "custom::56:0")
+        Options.shared.buttons.binding = [clickB, doubleB]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        time = 0.05; XCTAssertTrue(controller.handleUp(mouse(.up)))
+        time = 0.35; scheduler.fire()
+
+        XCTAssertEqual(executed.map(\.id), [clickB.id])
+        XCTAssertEqual(replays, 0)
+    }
+
+    func testScrollGestureExecutesBindingAndConsumes() {
+        let b = bind(.scrollUp)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        XCTAssertTrue(controller.hasScrollArmedSession)
+        time = 0.05
+        XCTAssertTrue(controller.handleScroll(dx: 0, dy: 4))   // 向上, 已布防 → 消费
+        time = 0.10; XCTAssertTrue(controller.handleUp(mouse(.up)))
+
+        XCTAssertEqual(executed.map(\.id), [b.id])
+        XCTAssertEqual(replays, 0)  // 滚轮手势触发后抬起不补点击
+        XCTAssertFalse(controller.hasScrollArmedSession)  // 抬起后会话清理
+    }
+
+    func testScrollOnNonScrollButtonNotConsumed() {
+        let b = bind(.longPress)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        XCTAssertFalse(controller.hasScrollArmedSession)
+        XCTAssertFalse(controller.handleScroll(dx: 0, dy: 4))  // 该按钮未布防滚轮 → 不消费
+    }
+
+    func testLongPressExecutesOnTimeout() {
+        let b = bind(.longPress)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        XCTAssertTrue(scheduler.isScheduled)
+        time = 0.35; scheduler.fire()
+        XCTAssertEqual(executed.map(\.id), [b.id])
+
+        time = 0.5; XCTAssertTrue(controller.handleUp(mouse(.up)))
+        XCTAssertFalse(controller.hasActiveSessions)
+    }
+
+    func testDragExecutesViaMotion() {
+        let b = bind(.dragRight)
+        Options.shared.buttons.binding = [b]
+        ButtonUtils.shared.invalidateCache()
+
+        let downCG = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .otherMouseDown,
+            mouseCursorPosition: CGPoint(x: 100, y: 100),
+            mouseButton: .center
+        )!
+        downCG.setIntegerValueField(.mouseEventButtonNumber, value: 3)
+        XCTAssertTrue(controller.handleDown(InputEvent(fromCGEvent: downCG)))
+
+        // 向右移动 100pt (y 翻转抵消, dx 与屏高无关) → dragRight
+        controller.handleMove(toCGLocation: CGPoint(x: 200, y: 100))
+
+        XCTAssertEqual(executed.map(\.id), [b.id])
+        XCTAssertEqual(replays, 0)
+    }
+
+    func testCancelAllClearsSessions() {
+        Options.shared.buttons.binding = [bind(.longPress)]
+        ButtonUtils.shared.invalidateCache()
+        XCTAssertTrue(controller.handleDown(mouse(.down)))
+        XCTAssertTrue(controller.hasActiveSessions)
+        controller.cancelAll()
+        XCTAssertFalse(controller.hasActiveSessions)
+    }
+}
+
+// MARK: - RecordedEvent gesture 持久化 / 展示 / 匹配
+final class RecordedEventGestureTests: XCTestCase {
+
+    func testClickGestureOmittedFromJSON() throws {
+        let event = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .click)
+        let data = try JSONEncoder().encode(event)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(object["gesture"], "Click gesture must not be written (向后兼容旧 JSON)")
+    }
+
+    func testNonClickGestureRoundTrips() throws {
+        let event = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .doubleClick)
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(RecordedEvent.self, from: data)
+        XCTAssertEqual(decoded.resolvedGesture, .doubleClick)
+    }
+
+    func testLegacyJSONWithoutGestureDecodesToClick() throws {
+        let json = #"{"type":"mouse","code":3,"modifiers":0,"deviceFilter":null}"#
+        let decoded = try JSONDecoder().decode(RecordedEvent.self, from: json.data(using: .utf8)!)
+        XCTAssertNil(decoded.gesture)
+        XCTAssertEqual(decoded.resolvedGesture, .click)
+    }
+
+    func testEqualityDistinguishesGesture() {
+        let click = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .click)
+        let double1 = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .doubleClick)
+        let double2 = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .doubleClick)
+        XCTAssertNotEqual(click, double1)
+        XCTAssertEqual(double1, double2)
+    }
+
+    func testDisplayComponentsAppendGestureBadgeForNonClick() {
+        // 行内徽章用紧凑字形 (避免撑爆触发区), 完整名称走 accessibilityLabel.
+        let double = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .doubleClick)
+        XCTAssertEqual(double.displayComponents.last, MouseGesture.doubleClick.displayBadgeComponent)
+        XCTAssertNotEqual(double.displayComponents.last, MouseGesture.doubleClick.displayName)
+        XCTAssertTrue(double.accessibilityLabel.contains(MouseGesture.doubleClick.displayName))
+        let click = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .click)
+        XCTAssertFalse(click.displayComponents.contains(where: { $0 == MouseGesture.doubleClick.displayBadgeComponent }))
+    }
+
+    func testButtonBindingRoundTripPreservesGesture() throws {
+        let trigger = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .longPress)
+        let binding = ButtonBinding(triggerEvent: trigger, systemShortcutName: "custom::56:0", isEnabled: true)
+        let data = try JSONEncoder().encode(binding)
+        let decoded = try JSONDecoder().decode(ButtonBinding.self, from: data)
+        XCTAssertEqual(decoded.triggerEvent.resolvedGesture, .longPress)
+    }
+
+    func testInputEventCarriesGestureToRecordedEvent() {
+        let event = InputEvent(type: .mouse, code: 3, modifiers: [], phase: .down,
+                               source: .hidPP, device: nil, gesture: .tripleClick)
+        let recorded = RecordedEvent(from: event)
+        XCTAssertEqual(recorded.resolvedGesture, .tripleClick)
+    }
+
+    func testInputProcessorIgnoresNonClickBindingOnRawDown() {
+        // 非单击绑定不应被原始 down 立即匹配 (应走手势协调器).
+        let trigger = RecordedEvent(type: .mouse, code: 9, modifiers: 0, deviceFilter: nil, gesture: .doubleClick)
+        let binding = ButtonBinding(triggerEvent: trigger, systemShortcutName: "custom::56:0", isEnabled: true)
+        Options.shared.buttons.binding = [binding]
+        ButtonUtils.shared.invalidateCache()
+        defer { Options.shared.buttons.binding = []; ButtonUtils.shared.invalidateCache() }
+
+        // 仅绑定双击 → 协调器接管 down (consumed), 但不会立即执行单击动作.
+        let down = InputEvent(type: .mouse, code: 9, modifiers: [], phase: .down, source: .hidPP, device: nil)
+        XCTAssertEqual(InputProcessor.shared.process(down), .consumed)
+        InputProcessor.shared.clearActiveBindings()
+    }
 }

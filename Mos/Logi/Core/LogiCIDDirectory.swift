@@ -409,6 +409,21 @@ struct LogiCIDDirectory {
         return nativeMouseButton(forCID: cid)
     }
 
+    /// HID++ CIDs that correspond to the primary (left / right) mouse clicks.
+    /// These are diverted as Logi MosCodes (1003 / 1004) so they never alias back to
+    /// native button 0 / 1; we still must treat them as primary buttons to forbid
+    /// gesture bindings (a left/right click bound to a gesture would lock out basic use).
+    private static let primaryClickCIDs: Set<UInt16> = [
+        0x0050,  // Left Button (diverted)  -> MosCode 1003
+        0x0051,  // Right Button (diverted) -> MosCode 1004
+    ]
+
+    /// Whether a Logi MosCode is a primary (left / right) mouse button.
+    static func isPrimaryMouseButton(forMosCode mosCode: UInt16) -> Bool {
+        guard let cid = toCID(mosCode) else { return false }
+        return primaryClickCIDs.contains(cid)
+    }
+
     /// HID++ CID for a native macOS mouse button number, when Mos knows a stable alias.
     static func cid(forNativeMouseButton button: UInt16) -> UInt16? {
         return nativeMouseButtonToCID[button]

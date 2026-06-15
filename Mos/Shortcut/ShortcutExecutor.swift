@@ -80,11 +80,45 @@ enum MosScrollActionKind {
     }
 }
 
+/// 系统媒体键 (NSEvent.systemDefined / NX_KEYTYPE_*). 与普通 CGKeyCode 不同, 需合成 systemDefined 事件.
+enum MediaKeyActionKind {
+    case volumeUp, volumeDown, mute
+    case brightnessUp, brightnessDown
+    case keyboardBacklightUp, keyboardBacklightDown
+
+    init?(shortcutIdentifier: String) {
+        switch shortcutIdentifier {
+        case "mediaVolumeUp":             self = .volumeUp
+        case "mediaVolumeDown":           self = .volumeDown
+        case "mediaMute":                 self = .mute
+        case "mediaBrightnessUp":         self = .brightnessUp
+        case "mediaBrightnessDown":       self = .brightnessDown
+        case "mediaKeyboardBacklightUp":  self = .keyboardBacklightUp
+        case "mediaKeyboardBacklightDown": self = .keyboardBacklightDown
+        default: return nil
+        }
+    }
+
+    /// NX_KEYTYPE_* 常量 (IOKit/hidsystem/ev_keymap.h).
+    var nxKeyType: Int32 {
+        switch self {
+        case .volumeUp:             return 0   // NX_KEYTYPE_SOUND_UP
+        case .volumeDown:           return 1   // NX_KEYTYPE_SOUND_DOWN
+        case .mute:                 return 7   // NX_KEYTYPE_MUTE
+        case .brightnessUp:         return 2   // NX_KEYTYPE_BRIGHTNESS_UP
+        case .brightnessDown:       return 3   // NX_KEYTYPE_BRIGHTNESS_DOWN
+        case .keyboardBacklightUp:   return 21 // NX_KEYTYPE_ILLUMINATION_UP
+        case .keyboardBacklightDown: return 22 // NX_KEYTYPE_ILLUMINATION_DOWN
+        }
+    }
+}
+
 enum ResolvedAction {
     case customKey(code: UInt16, modifiers: UInt64)
     case customMouseButton(buttonNumber: UInt16, modifiers: UInt64)
     case mouseButton(kind: MouseButtonActionKind)
     case mosScroll(role: ScrollRole)
+    case mediaKey(kind: MediaKeyActionKind)
     case systemShortcut(identifier: String)
     case logiAction(identifier: String)
     case openTarget(payload: OpenTargetPayload)
@@ -93,7 +127,7 @@ enum ResolvedAction {
         switch self {
         case .customKey, .customMouseButton, .mouseButton, .mosScroll:
             return .stateful
-        case .logiAction, .openTarget:
+        case .mediaKey, .logiAction, .openTarget:
             return .trigger
         case .systemShortcut(let identifier):
             return SystemShortcut.getShortcut(named: identifier)?.executionMode ?? .trigger
@@ -205,6 +239,10 @@ class ShortcutExecutor {
         case .mosScroll(let role):
             ScrollCore.shared.handleMosScrollAction(role: role, isDown: phase == .down)
             return .none
+        case .mediaKey(let kind):
+            guard phase == .down else { return .none }
+            executeMediaKey(kind)
+            return .none
         case .logiAction(let identifier):
             guard phase == .down else { return .none }
             executeLogiAction(identifier)
@@ -251,6 +289,9 @@ class ShortcutExecutor {
         }
         if let scrollAction = MosScrollActionKind(shortcutIdentifier: shortcutName) {
             return .mosScroll(role: scrollAction.role)
+        }
+        if let mediaKey = MediaKeyActionKind(shortcutIdentifier: shortcutName) {
+            return .mediaKey(kind: mediaKey)
         }
         if shortcutName.hasPrefix("logi") {
             return .logiAction(identifier: shortcutName)
@@ -523,6 +564,33 @@ class ShortcutExecutor {
     }
 
     // MARK: - Logi HID++ Actions
+
+    // MARK: - Media Key Actions
+
+    /// 合成并发送系统媒体键 (NSEvent.systemDefined / NX_KEYTYPE_*).
+    /// 音量/亮度/键盘背光不是普通 CGKeyCode, 必须用 subtype 8 的 systemDefined 事件,
+    /// data1 高 16 位放 NX key type, 低位放 key state (按下 0xA / 抬起 0xB).
+    private func executeMediaKey(_ kind: MediaKeyActionKind) {
+        postMediaKeyEvent(nxKeyType: kind.nxKeyType, keyDown: true)
+        postMediaKeyEvent(nxKeyType: kind.nxKeyType, keyDown: false)
+    }
+
+    private func postMediaKeyEvent(nxKeyType: Int32, keyDown: Bool) {
+        let keyState = keyDown ? 0xA : 0xB
+        let data1 = (Int(nxKeyType) << 16) | (keyState << 8)
+        guard let event = NSEvent.otherEvent(
+            with: .systemDefined,
+            location: .zero,
+            modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(keyDown ? 0xA00 : 0xB00)),
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            subtype: 8,   // NX_SUBTYPE_AUX_CONTROL_BUTTONS
+            data1: data1,
+            data2: -1
+        )?.cgEvent else { return }
+        event.post(tap: .cghidEventTap)
+    }
 
     /// 执行 Logitech HID++ 动作
     private func executeLogiAction(_ name: String) {

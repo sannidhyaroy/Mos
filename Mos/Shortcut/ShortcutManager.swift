@@ -135,6 +135,15 @@ class ShortcutManager {
             totalShortcuts: &totalShortcuts
         )
 
+        // 媒体键分类 (音量/亮度/键盘背光, 始终显示)
+        addCategoryToMenu(
+            menu: menu,
+            category: SystemShortcut.mediaKeysCategory,
+            target: target,
+            action: action,
+            totalShortcuts: &totalShortcuts
+        )
+
         // Mos 鼠标滚动分类 (始终显示, 使用 Mos tag 样式)
         addCategoryToMenu(
             menu: menu,

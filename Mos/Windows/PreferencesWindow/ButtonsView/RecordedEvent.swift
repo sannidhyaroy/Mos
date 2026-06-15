@@ -100,6 +100,9 @@ struct RecordedEvent: Codable, Equatable {
     let code: UInt16 // 按键代码
     let modifiers: UInt // 修饰键
     let deviceFilter: DeviceFilter?
+    /// 触发手势; nil 表示普通单击 (向后兼容: 旧配置没有此字段, 解码后为 nil).
+    /// 持久化时 `.click` 归一化为 nil, 保持旧 JSON 形态不变 (canary 友好).
+    let gesture: MouseGesture?
 
     // MARK: - 计算属性
 
@@ -108,12 +111,18 @@ struct RecordedEvent: Codable, Equatable {
         return NSEvent.ModifierFlags(rawValue: modifiers)
     }
 
+    /// 归一化手势 (nil → .click)
+    var resolvedGesture: MouseGesture {
+        return gesture ?? .click
+    }
+
     /// 转换为 ScrollHotkey (丢弃修饰键信息)
     var asScrollHotkey: ScrollHotkey {
         return ScrollHotkey(type: type, code: code)
     }
 
     /// 展示用名称组件按当前命名规则动态计算, 不写入持久化配置.
+    /// 非单击手势会在末尾追加一个手势徽章 (如 "双击" / "长按" / "← 拖拽").
     var displayComponents: [String] {
         let event = InputEvent(
             type: type,
@@ -123,7 +132,34 @@ struct RecordedEvent: Codable, Equatable {
             source: .hidPP,
             device: nil
         )
-        return event.displayComponents
+        var components = event.displayComponents
+        if let badge = resolvedGesture.displayBadgeComponent {
+            components.append(badge)
+        }
+        return components
+    }
+
+    /// 完整可读描述 (按键 + 完整本地化手势名), 供行内 tooltip / 辅助功能用.
+    /// 行内徽章为节省空间用紧凑字形 (◷ / ×2 / →), 这里补回完整名称避免歧义.
+    var accessibilityLabel: String {
+        let event = InputEvent(
+            type: type,
+            code: code,
+            modifiers: CGEventFlags(rawValue: UInt64(modifiers)),
+            phase: .down,
+            source: .hidPP,
+            device: nil
+        )
+        var parts = event.displayComponents.filter { $0 != "[Logi]" }
+        if resolvedGesture != .click {
+            parts.append(resolvedGesture.displayName)
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// 归一化: `.click` 不写入持久化 (存 nil), 保持旧 JSON 形态.
+    private static func normalize(_ gesture: MouseGesture?) -> MouseGesture? {
+        return (gesture == nil || gesture == .click) ? nil : gesture
     }
 
     // MARK: - INIT
@@ -139,30 +175,45 @@ struct RecordedEvent: Codable, Equatable {
             self.code = event.mouseCode
         }
         self.deviceFilter = nil
+        self.gesture = nil
     }
 
-    /// 从 InputEvent 构造
-    init(from event: InputEvent, deviceFilter: DeviceFilter? = nil) {
+    /// 从 InputEvent 构造 (gesture 显式参数优先, 否则取 event.gesture)
+    init(from event: InputEvent, deviceFilter: DeviceFilter? = nil, gesture: MouseGesture? = nil) {
         self.type = event.type
         self.code = event.code
         self.modifiers = UInt(event.modifiers.rawValue)
         self.deviceFilter = deviceFilter
+        self.gesture = Self.normalize(gesture ?? event.gesture)
     }
 
     /// 便捷构造 - 直接指定事件字段
-    init(type: EventType, code: UInt16, modifiers: UInt, deviceFilter: DeviceFilter?) {
+    init(type: EventType, code: UInt16, modifiers: UInt, deviceFilter: DeviceFilter?, gesture: MouseGesture? = nil) {
         self.type = type
         self.code = code
         self.modifiers = modifiers
         self.deviceFilter = deviceFilter
+        self.gesture = Self.normalize(gesture)
     }
 
     /// 兼容旧调用点: displayComponents 已改为动态计算, 这里不再存储传入值.
-    init(type: EventType, code: UInt16, modifiers: UInt, displayComponents: [String], deviceFilter: DeviceFilter?) {
+    init(type: EventType, code: UInt16, modifiers: UInt, displayComponents: [String], deviceFilter: DeviceFilter?, gesture: MouseGesture? = nil) {
         self.type = type
         self.code = code
         self.modifiers = modifiers
         self.deviceFilter = deviceFilter
+        self.gesture = Self.normalize(gesture)
+    }
+
+    /// 返回替换手势后的副本 (录制流程中确定手势后调用)
+    func withGesture(_ gesture: MouseGesture?) -> RecordedEvent {
+        return RecordedEvent(
+            type: type,
+            code: code,
+            modifiers: modifiers,
+            deviceFilter: deviceFilter,
+            gesture: gesture
+        )
     }
 
     func standardMouseAliasTriggerIfAvailable() -> RecordedEvent? {
@@ -233,10 +284,12 @@ struct RecordedEvent: Codable, Equatable {
     }
 
     /// Equatable
+    /// gesture 参与比较: 同一按钮的 "单击" 与 "双击" 是两条不同绑定, 不算重复.
     static func == (lhs: RecordedEvent, rhs: RecordedEvent) -> Bool {
         return lhs.type == rhs.type &&
                lhs.code == rhs.code &&
-               lhs.modifiers == rhs.modifiers
+               lhs.modifiers == rhs.modifiers &&
+               lhs.resolvedGesture == rhs.resolvedGesture
     }
 }
 

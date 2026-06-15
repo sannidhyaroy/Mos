@@ -357,15 +357,19 @@ internal class LogiSessionManager {
     /// 录制模式标志: 录制期间跳过动作执行, 只转发事件给 KeyRecorder
     private(set) var isRecording = false
 
-    /// 录制模式: 临时 divert 所有按键
-    func temporarilyDivertAll() {
+    /// 录制模式: 临时 divert 所有按键.
+    /// 返回是否存在被 divert 的 HID++ candidate (供录制方决定是否需要等待 divert 落地).
+    @discardableResult
+    func temporarilyDivertAll() -> Bool {
         isRecording = true
+        let candidates = sessions.values.filter { $0.isHIDPPCandidate }
         #if DEBUG
-        LogiTrace.log("[Manager] beginRecording sessions=\(sessions.count) candidates=\(sessions.values.filter { $0.isHIDPPCandidate }.count)")
+        LogiTrace.log("[Manager] beginRecording sessions=\(sessions.count) candidates=\(candidates.count)")
         #endif
-        for (_, session) in sessions where session.isHIDPPCandidate {
+        for session in candidates {
             session.temporarilyDivertAll()
         }
+        return !candidates.isEmpty
     }
 
     /// 录制结束: 恢复到只 divert 有绑定的按键
