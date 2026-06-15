@@ -139,6 +139,24 @@ struct RecordedEvent: Codable, Equatable {
         return components
     }
 
+    /// 完整可读描述 (按键 + 完整本地化手势名), 供行内 tooltip / 辅助功能用.
+    /// 行内徽章为节省空间用紧凑字形 (◷ / ×2 / →), 这里补回完整名称避免歧义.
+    var accessibilityLabel: String {
+        let event = InputEvent(
+            type: type,
+            code: code,
+            modifiers: CGEventFlags(rawValue: UInt64(modifiers)),
+            phase: .down,
+            source: .hidPP,
+            device: nil
+        )
+        var parts = event.displayComponents.filter { $0 != "[Logi]" }
+        if resolvedGesture != .click {
+            parts.append(resolvedGesture.displayName)
+        }
+        return parts.joined(separator: " ")
+    }
+
     /// 归一化: `.click` 不写入持久化 (存 nil), 保持旧 JSON 形态.
     private static func normalize(_ gesture: MouseGesture?) -> MouseGesture? {
         return (gesture == nil || gesture == .click) ? nil : gesture

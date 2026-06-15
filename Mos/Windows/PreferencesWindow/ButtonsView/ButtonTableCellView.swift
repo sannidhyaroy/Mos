@@ -199,13 +199,19 @@ class ButtonTableCellView: NSTableCellView, NSMenuDelegate {
         keyDisplayContainerView.addSubview(keyPreview)
 
         // 靠左对齐，按内容尺寸显示
+        // trailing ≤ 约束把整条预览限制在触发区内, 长名称的 Logi 按钮会在 KeyPreview 内截断,
+        // 不再溢出遮住右侧动作下拉 (配合 KeyPreview 内对长名称 pill 的截断处理).
         NSLayoutConstraint.activate([
             keyPreview.leadingAnchor.constraint(equalTo: keyDisplayContainerView.leadingAnchor),
             keyPreview.centerYAnchor.constraint(equalTo: keyDisplayContainerView.centerYAnchor),
+            keyPreview.trailingAnchor.constraint(lessThanOrEqualTo: keyDisplayContainerView.trailingAnchor),
         ])
 
         // 设置事件内容
         keyPreview.update(from: recordedEvent.displayComponents, status: .normal)
+
+        // 完整名称 (含完整手势名) 作为 tooltip, 弥补行内紧凑徽章/截断带来的信息损失.
+        keyPreview.toolTip = recordedEvent.accessibilityLabel
     }
 
     /// 绘制虚线分隔符

@@ -103,10 +103,20 @@ enum MouseGesture: String, Codable, Equatable, CaseIterable {
     }
 
     /// 展示徽章组件 (供 RecordedEvent.displayComponents 追加).
-    /// 单击不追加徽章 (与旧行为视觉一致), 其余手势追加一个简短徽章.
+    /// 单击不追加徽章 (与旧行为视觉一致), 其余手势追加一个 *紧凑* 的语言无关徽章,
+    /// 避免长名称的 Logi 按钮 + 完整手势名把触发区撑爆遮住右侧动作下拉.
+    /// 完整本地化名称仍由 `displayName` 提供 (行内 tooltip / 辅助功能用).
     var displayBadgeComponent: String? {
-        guard self != .click else { return nil }
-        return displayName
+        switch self {
+        case .click:        return nil
+        case .longPress:    return "◷"   // 计时器状字形, 表示按住
+        case .doubleClick:  return "×2"
+        case .tripleClick:  return "×3"
+        case .dragUp:       return "↑"
+        case .dragDown:     return "↓"
+        case .dragLeft:     return "←"
+        case .dragRight:    return "→"
+        }
     }
 }
 

@@ -1428,10 +1428,13 @@ final class RecordedEventGestureTests: XCTestCase {
     }
 
     func testDisplayComponentsAppendGestureBadgeForNonClick() {
+        // 行内徽章用紧凑字形 (避免撑爆触发区), 完整名称走 accessibilityLabel.
         let double = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .doubleClick)
-        XCTAssertEqual(double.displayComponents.last, MouseGesture.doubleClick.displayName)
+        XCTAssertEqual(double.displayComponents.last, MouseGesture.doubleClick.displayBadgeComponent)
+        XCTAssertNotEqual(double.displayComponents.last, MouseGesture.doubleClick.displayName)
+        XCTAssertTrue(double.accessibilityLabel.contains(MouseGesture.doubleClick.displayName))
         let click = RecordedEvent(type: .mouse, code: 3, modifiers: 0, deviceFilter: nil, gesture: .click)
-        XCTAssertFalse(click.displayComponents.contains(MouseGesture.doubleClick.displayName))
+        XCTAssertFalse(click.displayComponents.contains(where: { $0 == MouseGesture.doubleClick.displayBadgeComponent }))
     }
 
     func testButtonBindingRoundTripPreservesGesture() throws {
