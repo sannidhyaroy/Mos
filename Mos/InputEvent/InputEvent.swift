@@ -57,6 +57,8 @@ struct InputEvent {
     let phase: InputPhase      // 按下 / 抬起
     let source: InputSource    // 事件来源
     let device: InputDevice?   // 设备信息 (CGEventTap 来源为 nil)
+    /// 运行时手势 (仅录制流程识别后填充, 不参与持久化). 默认 .click.
+    let gesture: MouseGesture
 
     /// 从 CGEvent 构造
     /// 注意: .flagsChanged 事件也属于键盘域 (修饰键按下/抬起), 必须和 keyDown/keyUp 同类处理
@@ -73,17 +75,33 @@ struct InputEvent {
         self.phase = event.isKeyDown ? .down : .up
         self.source = .cgEvent(event)
         self.device = nil
+        self.gesture = .click
     }
 
     /// 从 HID++ 数据构造
     init(type: EventType, code: UInt16, modifiers: CGEventFlags,
-         phase: InputPhase, source: InputSource, device: InputDevice?) {
+         phase: InputPhase, source: InputSource, device: InputDevice?,
+         gesture: MouseGesture = .click) {
         self.type = type
         self.code = code
         self.modifiers = modifiers
         self.phase = phase
         self.source = source
         self.device = device
+        self.gesture = gesture
+    }
+
+    /// 返回替换手势后的副本 (录制识别出手势后使用)
+    func withGesture(_ gesture: MouseGesture) -> InputEvent {
+        return InputEvent(
+            type: type,
+            code: code,
+            modifiers: modifiers,
+            phase: phase,
+            source: source,
+            device: device,
+            gesture: gesture
+        )
     }
 
     // MARK: - Display
@@ -126,6 +144,10 @@ struct InputEvent {
             } else {
                 components.append(KeyCode.mouseMap[code] ?? "Mouse(\(code))")
             }
+        }
+        // 非单击手势: 追加手势徽章 (录制预览即时反馈)
+        if let badge = gesture.displayBadgeComponent {
+            components.append(badge)
         }
         return components
     }

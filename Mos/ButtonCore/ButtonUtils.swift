@@ -72,6 +72,29 @@ class ButtonUtils {
         return bestBinding
     }
 
+    /// 匹配指定手势的最佳绑定 (供手势协调器在识别出手势后查找动作).
+    func getBestMatchingBinding(
+        for event: InputEvent,
+        gesture: MouseGesture
+    ) -> ButtonBinding? {
+        return getBestMatchingBinding(for: event) { $0.triggerEvent.resolvedGesture == gesture }
+    }
+
+    /// 该输入事件 (按钮 + 当前修饰键) 命中的非单击手势集合.
+    /// 用 matchPriority 做修饰键匹配, 因此 "仅绑定 ⌘+双击" 时无修饰键按下不会被拦截.
+    /// 空集 = 走原有零延迟单击路径.
+    func armedNonClickGestures(for event: InputEvent) -> Set<MouseGesture> {
+        let candidates = getButtonBindings(for: event.type, code: event.code)
+        var gestures: Set<MouseGesture> = []
+        for binding in candidates where binding.isEnabled {
+            let gesture = binding.triggerEvent.resolvedGesture
+            guard gesture != .click else { continue }
+            guard binding.triggerEvent.matchPriority(for: event) != nil else { continue }
+            gestures.insert(gesture)
+        }
+        return gestures
+    }
+
     /// 标记缓存失效 (绑定变更后调用)
     func invalidateCache() {
         isDirty = true

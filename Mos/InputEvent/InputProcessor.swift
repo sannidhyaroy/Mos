@@ -59,6 +59,7 @@ class InputProcessor {
         }
         activeBindings.removeAll()
         activeModifierFlags = 0
+        MouseGestureController.shared.cancelAll()
         MouseInteractionSessionController.shared.clearAllSessions()
         MouseInteractionSessionController.shared.refreshMotionTapState()
     }
@@ -91,6 +92,10 @@ class InputProcessor {
     /// - Returns: .consumed 表示事件已处理, .passthrough 表示未匹配
     func process(_ event: InputEvent) -> InputResult {
         if event.phase == .up {
+            // 手势会话优先消费对应按钮的抬起
+            if event.type == .mouse, MouseGestureController.shared.handleUp(event) {
+                return .consumed
+            }
             // Up 事件: 按 (type, code) 查表, 忽略 modifiers (用户可能已松开修饰键)
             if releaseActiveBinding(for: event) {
                 return .consumed
@@ -98,9 +103,14 @@ class InputProcessor {
             return .passthrough
         }
 
-        // Down 事件: 完整匹配 (type + code + modifiers + deviceFilter)
+        // Down 事件: 若该按钮命中非单击手势, 交给手势协调器 (延迟识别), 不走立即单击路径.
+        if event.type == .mouse, MouseGestureController.shared.handleDown(event) {
+            return .consumed
+        }
+
+        // Down 事件: 完整匹配 (type + code + modifiers + deviceFilter), 仅限单击手势绑定.
         let key = TriggerKey(type: event.type, code: event.code)
-        guard let binding = ButtonUtils.shared.getBestMatchingBinding(for: event) else {
+        guard let binding = ButtonUtils.shared.getBestMatchingBinding(for: event, gesture: .click) else {
             return .passthrough
         }
         guard let action = ShortcutExecutor.shared.resolveAction(

@@ -32,7 +32,7 @@ final class LogiIntegrationBridge: LogiExternalBridge {
         if event.phase == .down,
            let binding = ButtonUtils.shared.getBestMatchingBinding(
                for: event,
-               where: { $0.systemShortcutName.hasPrefix("logi") }
+               where: { $0.systemShortcutName.hasPrefix("logi") && $0.triggerEvent.resolvedGesture == .click }
            ) {
             return .logiAction(name: binding.systemShortcutName)
         }

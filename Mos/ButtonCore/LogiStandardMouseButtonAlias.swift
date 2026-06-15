@@ -24,7 +24,8 @@ enum LogiStandardMouseButtonAlias {
             type: .mouse,
             code: nativeCode,
             modifiers: event.modifiers,
-            deviceFilter: nil
+            deviceFilter: nil,
+            gesture: event.gesture
         )
     }
 
