@@ -50,6 +50,9 @@ class KeyRecorder: NSObject {
     static let TIMEOUT: TimeInterval = 10.0
     private static let recordedFeedbackDelay: TimeInterval = 0.7
     private static let duplicateFeedbackDelay: TimeInterval = 1.0
+    /// divert 落地等待窗口: combination 模式且存在 Logi candidate 时, 延迟此时间再装载
+    /// CGEvent tap, 给 HID++ divert 写入在设备上生效的时间 (BLE 往返无同步确认, 取保守值).
+    private static let recordingDivertSettleDelay: TimeInterval = 0.35
     static let FLAG_CHANGE_NOTI_NAME = NSNotification.Name("RECORD_FLAG_CHANGE_NOTI_NAME")
     static let FINISH_NOTI_NAME = NSNotification.Name("RECORD_FINISH_NOTI_NAME")
     static let CANCEL_NOTI_NAME = NSNotification.Name("RECORD_CANCEL_NOTI_NAME")
@@ -140,10 +143,26 @@ class KeyRecorder: NSObject {
         // 立即显示 Popover (不等待 HID++ divert)
         keyPopover = KeyPopover()
         keyPopover?.show(at: sourceView)
-        // 异步 divert 所有 Logitech 按键 (BLE 通信有延迟)
-        DispatchQueue.main.async {
-            LogiCenter.shared.beginKeyRecording()
+        // 同步请求 divert (在装载事件捕获之前), 返回是否有 Logi candidate 被 divert.
+        let didDivertLogiCandidate = LogiCenter.shared.beginKeyRecording()
+        // 有 Logi candidate 且 combination 模式: 延迟装载 CGEvent tap, 等 divert 在设备上落地,
+        // 否则首次按下时 tap 会抢到设备未 divert 的回退键 (如 Fn+Ctrl+Up), 录成键盘组合.
+        // 无 Logi 设备 / 非 combination 模式: 立即装载, 不引入额外延迟.
+        if didDivertLogiCandidate && mode == .combination {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.recordingDivertSettleDelay) { [weak self] in
+                // keyPopover 在 stopRecording 中被同步置 nil (isRecording 则延迟 0.5s 才复位),
+                // 用它判定 settle 期间是否已被取消, 避免取消后又把 tap 装载回来.
+                guard let self = self, self.isRecording, self.keyPopover != nil else { return }
+                self.armRecordingCapture()
+            }
+        } else {
+            armRecordingCapture()
         }
+    }
+
+    /// 装载事件捕获 (通知观察者 + CGEvent tap + HID++ 观察者 + 超时定时器).
+    /// 单独成方法以便 divert settle 期间延迟装载, 避免抢到设备回退键.
+    private func armRecordingCapture() {
         // 监听事件
         do {
             // 监听回调事件通知

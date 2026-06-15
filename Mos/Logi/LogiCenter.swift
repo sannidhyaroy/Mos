@@ -97,7 +97,10 @@ final class LogiCenter {
 
     // MARK: - Recording
     var isRecording: Bool { manager.isRecording }
-    func beginKeyRecording() { manager.temporarilyDivertAll() }
+    /// 进入录制模式, 临时 divert 所有 Logi 按键.
+    /// 返回是否有 HID++ candidate 被 divert (无 Logi 设备时返回 false, 录制方无需等待 divert 落地).
+    @discardableResult
+    func beginKeyRecording() -> Bool { manager.temporarilyDivertAll() }
     func endKeyRecording() { manager.restoreDivertToBindings() }
 
     // MARK: - Feature actions
