@@ -1116,14 +1116,18 @@ final class MouseGestureModelTests: XCTestCase {
     }
 
     func testPrimaryButtonsOnlyAllowClick() {
-        // 左键 (0) / 右键 (1) 只允许单击
-        for code: UInt16 in [0, 1] {
+        // 原生左键 (0) / 右键 (1) 以及 Logi 转发的左右键 (1003/1004) 只允许单击.
+        for code: UInt16 in [0, 1, 1003, 1004] {
+            XCTAssertTrue(MouseGesture.isPrimaryMouseButton(code), "code \(code) 应判定为主键")
             XCTAssertTrue(MouseGesture.isAllowed(.click, forMouseCode: code))
             XCTAssertFalse(MouseGesture.isAllowed(.doubleClick, forMouseCode: code))
             XCTAssertFalse(MouseGesture.isAllowed(.longPress, forMouseCode: code))
             XCTAssertFalse(MouseGesture.isAllowed(.dragRight, forMouseCode: code))
         }
-        // 非主键允许全部手势
+        // 非主键 (普通后退键 3 / Logi 手势键 1000 / Logi 中键 1005) 允许全部手势
+        XCTAssertFalse(MouseGesture.isPrimaryMouseButton(3))
+        XCTAssertFalse(MouseGesture.isPrimaryMouseButton(1000))
+        XCTAssertFalse(MouseGesture.isPrimaryMouseButton(1005))
         XCTAssertTrue(MouseGesture.isAllowed(.doubleClick, forMouseCode: 3))
         XCTAssertTrue(MouseGesture.isAllowed(.dragLeft, forMouseCode: 1000))
     }

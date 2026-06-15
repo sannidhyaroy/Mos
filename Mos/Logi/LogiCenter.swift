@@ -69,6 +69,11 @@ final class LogiCenter {
         #endif
         return nativeButton
     }
+    /// Whether a Logi MosCode is a primary (left / right) mouse button.
+    /// Used to forbid gesture bindings on primary buttons (incl. diverted Logi left/right).
+    func isPrimaryMouseButton(forMosCode code: UInt16) -> Bool {
+        return LogiCIDDirectory.isPrimaryMouseButton(forMosCode: code)
+    }
 
     // MARK: - Conflict
     func buttonCaptureDiagnosis(forMosCode code: UInt16) -> LogiButtonCaptureDiagnosis {

@@ -72,10 +72,17 @@ enum MouseGesture: String, Codable, Equatable, CaseIterable {
 
     // MARK: - 主键限制
 
-    /// 主键 (左键 code 0 / 右键 code 1) 是否允许该手势.
+    /// 是否为主键 (左/右键). 覆盖原生 code 0/1 *以及* Logi 转发的左右键 (MosCode 1003/1004).
+    /// Logi 左右键不会回落到原生 0/1, 必须单独识别, 否则手势限制会漏掉它们.
+    static func isPrimaryMouseButton(_ code: UInt16) -> Bool {
+        if KeyCode.mouseMainKeys.contains(code) { return true }
+        return LogiCenter.shared.isPrimaryMouseButton(forMosCode: code)
+    }
+
+    /// 主键 (左/右键, 含 Logi 转发) 是否允许该手势.
     /// 全部禁止 — 避免用户在主键上误绑手势导致无法正常点击.
     static func isAllowed(_ gesture: MouseGesture, forMouseCode code: UInt16) -> Bool {
-        if KeyCode.mouseMainKeys.contains(code) {
+        if isPrimaryMouseButton(code) {
             return gesture == .click
         }
         return true

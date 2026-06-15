@@ -244,10 +244,11 @@ class KeyRecorder: NSObject {
                 guard let self = self, self.isRecording, !self.isRecorded else { return }
                 guard let mosEvent = notification.userInfo?["event"] as? InputEvent else { return }
                 // 非主键鼠标按钮 + combination 模式: 走手势捕获 (需要 down/up).
+                // 主键 (原生 0/1 与 Logi 转发的左右键 1003/1004) 不走手势捕获, 作为普通点击录制.
                 // HID++ 不带指针坐标, 以当前指针位置作为拖拽锚点 (物理移动仍由 motion tap 捕获).
                 if self.recordingMode == .combination,
                    mosEvent.type == .mouse,
-                   !KeyCode.mouseMainKeys.contains(mosEvent.code) {
+                   !MouseGesture.isPrimaryMouseButton(mosEvent.code) {
                     self.routeMouseGestureInput(mosEvent, naturalLocation: NSEvent.mouseLocation)
                     return
                 }
