@@ -398,9 +398,10 @@ struct SystemShortcut {
         ("categoryNavigation", [
             navigateBack, navigateForward, previousTab, nextTab, switchTabLeft, switchTabRight
         ]),
-        // ("categoryAccessibility", [  // 暂时不提供, 有问题
-        //     invertColors, zoomIn, zoomOut
-        // ]),
+        ("categoryAccessibility", [
+            // 缩放依赖 系统设置 > 辅助功能 > 缩放 中的快捷键开关; 颜色反转始终可用.
+            zoomIn, zoomOut, invertColors
+        ]),
     ]
 
     // MARK: - Mouse Button Actions
