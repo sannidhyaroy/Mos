@@ -22,11 +22,13 @@ final class MouseGestureCapture {
 
     private(set) var isActive = false
     private var motionInterceptor: Interceptor?
+    private var scrollInterceptor: Interceptor?
 
     /// 录制时布防全部非单击手势, 任何动作都能被识别.
     private static let allGestures: Set<MouseGesture> = [
         .longPress, .doubleClick, .tripleClick,
         .dragUp, .dragDown, .dragLeft, .dragRight,
+        .scrollUp, .scrollDown, .scrollLeft, .scrollRight,
     ]
 
     init(now: @escaping () -> TimeInterval = { CACurrentMediaTime() }) {
@@ -59,6 +61,13 @@ final class MouseGestureCapture {
     func move(to location: CGPoint) {
         guard isActive else { return }
         recognizer.handleMove(to: location, time: now())
+        reschedule()
+    }
+
+    /// 滚轮滚动 (录制期间由 listen-only 滚动 tap 转发). dx/dy 为 CGEvent 原始 delta.
+    func scroll(dx: CGFloat, dy: CGFloat) {
+        guard isActive else { return }
+        recognizer.handleScroll(dx: dx, dy: dy, time: now())
         reschedule()
     }
 
@@ -139,6 +148,7 @@ final class MouseGestureCapture {
             NSLog("MouseGestureCapture: failed to start motion tap: \(error)")
             motionInterceptor = nil
         }
+        startScrollTap()
     }
 
     private func stopMotionTap() {
@@ -147,5 +157,46 @@ final class MouseGestureCapture {
         }
         motionInterceptor?.stop()
         motionInterceptor = nil
+        stopScrollTap()
+    }
+
+    // MARK: - listen-only scroll tap (录制期间观察滚轮以判定滚轮手势方向)
+    private static let scrollEventMask = CGEventMask(1 << CGEventType.scrollWheel.rawValue)
+
+    private static let scrollCallback: CGEventTapCallBack = { _, type, event, _ in
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            return Unmanaged.passUnretained(event)
+        }
+        guard type == .scrollWheel, let capture = MouseGestureCapture.active else {
+            return Unmanaged.passUnretained(event)
+        }
+        let dy = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
+        let dx = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+        DispatchQueue.main.async {
+            capture.scroll(dx: CGFloat(dx), dy: CGFloat(dy))
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    private func startScrollTap() {
+        guard scrollInterceptor == nil else { return }
+        do {
+            let interceptor = try Interceptor(
+                event: Self.scrollEventMask,
+                handleBy: Self.scrollCallback,
+                listenOn: .cgAnnotatedSessionEventTap,
+                placeAt: .tailAppendEventTap,
+                for: .listenOnly
+            )
+            scrollInterceptor = interceptor
+        } catch {
+            NSLog("MouseGestureCapture: failed to start scroll tap: \(error)")
+            scrollInterceptor = nil
+        }
+    }
+
+    private func stopScrollTap() {
+        scrollInterceptor?.stop()
+        scrollInterceptor = nil
     }
 }
